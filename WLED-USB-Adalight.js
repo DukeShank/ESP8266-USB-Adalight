@@ -60,14 +60,48 @@ const BAUD_RATE = 115200;
 // Start at approximately 25 FPS to leave some serial overhead.
 const FRAME_INTERVAL_MS = 40;
 
-// One horizontal row of 111 LEDs in the SignalRGB canvas.
-const ledNames = [];
-const ledPositions = [];
+// Physical monitor perimeter, matching the original WLED layout.
+//
+// LED 1 starts at the bottom-left.
+// 1–20:   left edge, bottom to top
+// 21–55:  top edge, left to right
+// 56–75:  right edge, top to bottom
+// 76–111: bottom edge, right to left
+//
+// Grid coordinates run from x=0..36 and y=0..21.
+const CANVAS_WIDTH = 37;
+const CANVAS_HEIGHT = 22;
 
-for (let index = 0; index < LED_COUNT; index++) {
-    ledNames.push(`LED ${index + 1}`);
-    ledPositions.push([index, 0]);
-}
+const ledNames = Array.from(
+    { length: LED_COUNT },
+    (_, index) => `LED ${index + 1}`
+);
+
+const ledPositions = [
+    // LEDs 1–20: left edge, bottom to top.
+    ...Array.from(
+        { length: 20 },
+        (_, index) => [0, 20 - index]
+    ),
+
+    // LEDs 21–55: top edge, left to right.
+    ...Array.from(
+        { length: 35 },
+        (_, index) => [index + 1, 0]
+    ),
+
+    // LEDs 56–75: right edge, top to bottom.
+    ...Array.from(
+        { length: 20 },
+        (_, index) => [36, index + 1]
+    ),
+
+    // LEDs 76–111: bottom edge, right to left.
+    ...Array.from(
+        { length: 36 },
+        (_, index) => [36 - index, 21]
+    )
+];
 
 let serialConnected = false;
 let lastFrameTime = 0;
@@ -101,7 +135,7 @@ export function DeviceType() {
 }
 // Device layout
 export function Size() {
-    return [LED_COUNT, 1];
+    return [CANVAS_WIDTH, CANVAS_HEIGHT];
 }
 
 export function DefaultPosition() {
@@ -212,15 +246,18 @@ export function Render() {
 
     // Adalight expects RGB triples. WLED handles the strip's GRB
     // hardware colour order separately.
+    // Read the colour from the physical LED's mapped 2D position.
     for (let index = 0; index < LED_COUNT; index++) {
-        const color = device.color(index, 0);
+        const [x, y] = ledPositions[index];
+        const color = device.color(x, y);
 
+        // Adalight expects RGB byte order.
         frame.push(
-            toByte(color && color[0]),
-            toByte(color && color[1]),
+             toByte(color && color[0]),
+             toByte(color && color[1]),
             toByte(color && color[2])
-        );
-    }
+    );
+}
 
     try {
         const written = serial.write(frame);
