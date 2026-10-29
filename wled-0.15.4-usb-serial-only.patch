@@ -1,8 +1,8 @@
 diff --git a/wled00/wled.cpp b/wled00/wled.cpp
-index 98b64ea..eec9cc4 100644
+index 98b64ea..2d6d32f 100644
 --- a/wled00/wled.cpp
 +++ b/wled00/wled.cpp
-@@ -53,18 +53,24 @@ void WLED::loop()
+@@ -53,18 +53,26 @@ void WLED::loop()
    static size_t        avgStripMillis = 0;
    unsigned long        stripMillis;
  #endif
@@ -26,11 +26,12 @@ index 98b64ea..eec9cc4 100644
 +  #endif
 +
    handleNotifications();
--  handleTransitions();
+   handleTransitions();
++
    #ifdef WLED_ENABLE_DMX
    handleDMX();
    #endif
-@@ -457,10 +463,14 @@ void WLED::setup()
+@@ -457,10 +465,14 @@ void WLED::setup()
    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
    #endif
    #endif
@@ -45,7 +46,7 @@ index 98b64ea..eec9cc4 100644
  
    // all GPIOs are allocated at this point
    serialCanRX = !PinManager::isPinAllocated(hardwareRX); // Serial RX pin (GPIO 3 on ESP32 and ESP8266)
-@@ -581,6 +591,10 @@ void WLED::beginStrip()
+@@ -581,6 +593,10 @@ void WLED::beginStrip()
  
  void WLED::initAP(bool resetAP)
  {
@@ -56,7 +57,7 @@ index 98b64ea..eec9cc4 100644
    if (apBehavior == AP_BEHAVIOR_BUTTON_ONLY && !resetAP)
      return;
  
-@@ -616,6 +630,7 @@ void WLED::initAP(bool resetAP)
+@@ -616,6 +632,7 @@ void WLED::initAP(bool resetAP)
      dnsServer.start(53, "*", WiFi.softAPIP());
    }
    apActive = true;
@@ -64,7 +65,7 @@ index 98b64ea..eec9cc4 100644
  }
  
  bool WLED::initEthernet()
-@@ -760,6 +775,9 @@ int8_t WLED::findWiFi(bool doScan) {
+@@ -760,6 +777,9 @@ int8_t WLED::findWiFi(bool doScan) {
  
  void WLED::initConnection()
  {
@@ -74,7 +75,7 @@ index 98b64ea..eec9cc4 100644
    DEBUG_PRINTF_P(PSTR("initConnection() called @ %lus.\n"), millis()/1000);
  
    #ifdef WLED_ENABLE_WEBSOCKETS
-@@ -840,6 +858,7 @@ void WLED::initConnection()
+@@ -840,6 +860,7 @@ void WLED::initConnection()
      statusESPNow = espNowOK ? ESP_NOW_STATE_ON : ESP_NOW_STATE_ERROR;
    }
  #endif
