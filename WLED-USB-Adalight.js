@@ -50,7 +50,7 @@
  * LICENCE
  * See the repository's LICENSE file.
  */
-import { serial } from "@SignalRGB/serial";
+import serial from "@SignalRGB/serial";
 
 // Hardware configuration
 const LED_COUNT = 111;
