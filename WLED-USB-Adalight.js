@@ -96,6 +96,9 @@ export function Type() {
     return "serial";
 }
 
+export function DeviceType() {
+    return "lightingcontroller";
+}
 // Device layout
 export function Size() {
     return [LED_COUNT, 1];
