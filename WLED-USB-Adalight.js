@@ -43,9 +43,10 @@
  *   or Wi-Fi management functionality.
  *
  * STATUS
- * Experimental. The direct Adalight transmission to the target
- * firmware has been verified; SignalRGB integration still needs
- * end-to-end testing.
+ * Experimental. End-to-end operation has been verified on Windows 11
+ * with SignalRGB, a 111-LED WS281x strip, and the custom WLED 0.15.4
+ * ESP8266 firmware. Other hardware, layouts, and software versions
+ * may require adaptation.
  *
  * LICENCE
  * See the repository's LICENSE file.
