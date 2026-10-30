@@ -1,52 +1,46 @@
 /*
- * WLED USB Adalight — SignalRGB Plugin
+ * ESP8266 USB Adalight — SignalRGB Plugin
  * Copyright (c) 2026 DukeShank
  *
  * PURPOSE
- * Streams per-LED RGB colour data from SignalRGB to a compatible
- * ESP8266-based LED controller over USB serial using the Adalight
- * real-time LED protocol.
+ * Streams per-LED RGB colour data from SignalRGB to an ESP8266
+ * controller over USB serial using the Adalight protocol.
  *
  * TARGET HARDWARE
- * - Controller: ESP8266 with CH340 USB-to-serial adapter
+ * - Controller: ESP8266 NodeMCU / ESP-12E
+ * - USB-to-serial interface: CH340
  * - USB Vendor ID: 0x1A86
  * - USB Product ID: 0x7523
- * - LED strip: 111 WS281x addressable RGB LEDs
- * - LED data pin: GPIO2
- * - WLED colour order: GRB
+ * - LED strip: 111 WS2812B / compatible WS281x LEDs
+ * - LED output: GPIO2 (UART1 TX)
+ * - LED colour order: GRB
  *
  * FIRMWARE REQUIREMENTS
- * - WLED 0.15.4 with the project's custom USB-serial-only changes
- * - Adalight serial input must remain enabled
- * - Wi-Fi startup and reconnection are disabled in the custom build
+ * - Project's standalone ESP8266 Adalight firmware
+ * - UART0 RX for serial reception (GPIO3)
+ * - UART1 TX for WS2812 LED output (GPIO2)
+ * - No WLED installation required
  *
  * SERIAL CONFIGURATION
  * - Protocol: Adalight
- * - Baud rate: 115200
+ * - Baud rate: 230400
  * - Format: 8 data bits, no parity, 1 stop bit (8-N-1)
- * - Frame rate: approximately 25 FPS, subject to USB and
- *   SignalRGB rendering performance
+ * - Frame interval: 40 ms (25 FPS requested maximum)
  *
  * INSTALLATION
- * Copy this file to:
- * %USERPROFILE%\Documents\WhirlwindFX\Plugins
- *
- * Close other applications using the controller's COM port,
- * then restart SignalRGB to load the plugin.
+ * Copy this file into the custom user-plugin directory opened
+ * through SignalRGB's Device Information > Plugins button.
+ * Fully exit and restart SignalRGB after replacing the plugin.
  *
  * LIMITATIONS
- * - The plugin identifies hardware by USB VID/PID, not by COM
- *   number. Other CH340 devices may share these identifiers.
- * - The controller must be running compatible Adalight firmware.
- * - Real-time mode may end when serial frames stop arriving.
- * - The custom firmware does not provide the normal WLED web UI
- *   or Wi-Fi management functionality.
+ * - Hardware is identified by USB VID/PID, not a fixed COM port.
+ * - Other CH340 devices may use the same identifiers.
+ * - Physical LED geometry is defined by ledPositions below.
+ * - The controller has no Wi-Fi, web interface, or network control.
  *
  * STATUS
- * Experimental. End-to-end operation has been verified on Windows 11
- * with SignalRGB, a 111-LED WS281x strip, and the custom WLED 0.15.4
- * ESP8266 firmware. Other hardware, layouts, and software versions
- * may require adaptation.
+ * End-to-end operation verified on Windows 11 with SignalRGB,
+ * standalone ESP8266 firmware, and a 111-LED WS281x strip.
  *
  * LICENCE
  * See the repository's LICENSE file.
@@ -210,7 +204,7 @@ function toByte(value) {
     return Math.max(0, Math.min(255, Math.round(number)));
 }
 
-// Send one Adalight frame to WLED.
+// Send one Adalight frame to the ESP8266 controller.
 export function Render() {
     if (!serialConnected) {
         connectSerial();
