@@ -1,142 +1,206 @@
-# WLED USB Adalight for SignalRGB
+# ESP8266 USB Adalight for SignalRGB
 
-A custom SignalRGB serial plugin and WLED firmware patch for controlling an ESP8266-based addressable RGB LED strip directly over USB using the Adalight protocol. The intended setup operates without Wi-Fi.
+A standalone ESP8266 firmware and SignalRGB plugin for driving an addressable RGB LED strip over USB serial using the Adalight protocol.
 
-**Status:** End-to-end operation has been tested with SignalRGB on Windows 11, a 111-LED WS281x strip, and a custom WLED 0.15.4 ESP8266 build. The repository is based on that working setup; other boards and LED configurations may need changes.
+The primary firmware is a small PlatformIO project built with the ESP8266 Arduino framework and NeoPixelBus. It does not use WLED and does not provide Wi-Fi, a web interface, presets, or network control.
 
-## Disclaimer
+## Tested configuration
 
-This repository is provided for informational and educational purposes only. The plugin, source patch, build instructions, and any firmware binaries are provided “AS IS” and “AS AVAILABLE,” without warranties of any kind, express or implied, to the maximum extent permitted by applicable law. **Use them at your own risk.** You are responsible for evaluating, testing, building, flashing, modifying, and using these materials, including verifying compatibility and keeping suitable backups and recovery firmware. Custom firmware can disable normal control and recovery paths; applying it incorrectly may cause loss of configuration, device malfunction, or hardware damage. The authors and contributors are not responsible for loss or damage arising from the use, misuse, or inability to use these materials, to the maximum extent permitted by law. Nothing in this notice excludes liability that cannot legally be excluded.
-
-This is an independent community project and is not an official WLED or SignalRGB project, nor is it endorsed by either. No ongoing support or compatibility with future versions is promised.
-
-## How it works
-
-The SignalRGB plugin reads colours from a 2D canvas, packages them as Adalight frames, and sends them over the controller's USB serial connection. WLED receives those frames and drives the strip. The custom firmware disables the normal Wi-Fi connection and access-point paths while retaining Adalight serial input.
-
-This is a custom firmware build, not an official WLED binary. The firmware patch is provided separately from the SignalRGB plugin.
-
-## Tested hardware and configuration
+This repository documents one tested installation:
 
 | Property | Tested value |
 | --- | --- |
-| Controller | ESP8266 development board |
-| USB-to-serial adapter | CH340 |
-| USB Vendor ID | `0x1A86` |
-| USB Product ID | `0x7523` |
-| LED chipset | WS281x addressable RGB |
+| Controller | ESP8266 NodeMCU-style board (ESP-12E) |
+| USB-to-serial interface | CH340 |
+| USB Vendor ID / Product ID | `0x1A86` / `0x7523` |
+| LED chipset | WS2812B / compatible WS281x RGB strip |
 | LED count | 111 |
-| LED data output | GPIO2 (often labelled D4) |
-| WLED colour order | GRB |
-| Serial protocol | Adalight |
-| Baud rate | 115200 |
-| Serial format | 8 data bits, no parity, 1 stop bit (8-N-1) |
-| SignalRGB layout | 37 × 22 canvas |
+| LED output | UART1 TX, GPIO2 (often labelled D4) |
+| LED colour order | GRB |
+| Host serial input | UART0 RX, GPIO3 |
+| Runtime serial baud | 230400 baud, 8-N-1 |
+| Adalight frame size | 339 bytes (6-byte header + 333-byte RGB payload) |
+| Requested plugin frame interval | 40 ms (25 FPS cap) |
+| No-valid-frame timeout | 2500 ms |
+| PlatformIO environment | `nodemcuv2` |
+| ESP8266 PlatformIO platform | `espressif8266@4.2.1` |
+| LED library | `makuna/NeoPixelBus@2.8.4` |
 
-The Windows COM port can change when the controller is reconnected. The plugin matches the USB VID/PID rather than a hard-coded COM port. Other CH340 devices may use the same identifiers and could cause a device match conflict.
+Other boards, USB-to-serial interfaces, LED chipsets, LED counts, wiring layouts, and software versions may require changes and additional testing.
 
-## Physical LED order and SignalRGB mapping
+## Repository layout
 
-The tested 111-LED strip follows the perimeter of a monitor, starting at the bottom-left corner:
+```text
+.
+├── firmware/
+│   ├── platformio.ini
+│   └── src/
+│       └── main.cpp
+├── plugin/
+│   └── WLED-USB-Adalight.js
+├── legacy/
+│   └── wled-0.15.4/
+│       ├── README.md
+│       ├── wled-0.15.4-usb-serial-only.patch
+│       └── WLED-LICENSE-EUPL-1.2.txt
+├── LICENSE
+└── README.md
+```
 
-| LED indices | LEDs | Physical direction |
-| --- | ---: | --- |
-| 1–20 | 20 | Left edge, bottom to top |
-| 21–55 | 35 | Top edge, left to right |
-| 56–75 | 20 | Right edge, top to bottom |
-| 76–111 | 36 | Bottom edge, right to left |
+`firmware/` is the recommended implementation. `legacy/wled-0.15.4/` preserves the earlier WLED-based approach for reference; it is not required by the standalone firmware.
 
-The plugin maps these LEDs to a 37 × 22 SignalRGB canvas so effects follow the physical strip path. Different LED counts or physical routing require edits to the constants and `ledPositions` array in `WLED-USB-Adalight.js`.
+## How it works
 
-## Install the SignalRGB plugin
+The SignalRGB plugin samples the colours at the configured physical LED positions, assembles an Adalight frame, and sends it over USB serial. The ESP8266 firmware validates the Adalight header and checksum, receives the complete RGB payload into a staging buffer, and then updates the LED strip.
 
-1. Download [`WLED-USB-Adalight.js`](./WLED-USB-Adalight.js) from this repository.
-2. Copy it to SignalRGB's user plugin directory:
+The firmware handles the sequential LED data only. It does not know the monitor's physical geometry. LED placement, direction, and screen-to-LED mapping are defined by the SignalRGB plugin's `ledPositions` array. The existing plugin contains the mapping for the tested installation; adapt that array for a different physical layout.
 
-   ```text
-   %USERPROFILE%\Documents\WhirlwindFX\Plugins
-   ```
+### ESP8266 peripheral allocation
 
-3. Close other programs that might have the controller's COM port open, including serial monitors or firmware tools.
-4. Restart SignalRGB.
-5. Confirm that **WLED USB Adalight (111 LEDs)** appears and check SignalRGB's device console if it fails to connect.
-6. Run a perimeter effect and confirm that its direction follows the LED order described above.
+The firmware uses the ESP8266's two UARTs for separate jobs:
 
-The plugin uses SignalRGB's built-in serial API. It requests 115200 baud and limits frame-send attempts to one every 40 ms (approximately 25 FPS maximum before other processing and transmission overhead).
+- **UART0 RX / GPIO3:** receives Adalight data from SignalRGB at 230400 baud.
+- **UART1 TX / GPIO2:** outputs the WS2812-compatible LED waveform through NeoPixelBus's `NeoEsp8266Uart1Ws2812xMethod`.
 
-## Custom WLED USB-only firmware
+UART1's WS2812 output method is fixed to GPIO2 on this target. The LED output pin is therefore not a freely configurable GPIO setting in this implementation.
 
-The firmware change is a patch for **WLED v0.15.4**, targeting the ESP8266 `nodemcuv2` PlatformIO environment. The patch is in [`wled-0.15.4-usb-serial-only.patch`](./wled-0.15.4-usb-serial-only.patch). It has been checked against a clean WLED 0.15.4 source tree.
+## Firmware behaviour
 
-The patch:
+The standalone firmware is deliberately limited to the functions required by this installation:
 
-- Defines the project-specific `WLED_USB_SERIAL_ONLY` flag. This is not a standard WLED build option.
-- Sets Wi-Fi to `WIFI_OFF` during setup and skips normal station initialisation and connection handling.
-- Prevents normal access-point initialisation and skips Improv Wi-Fi scanning in the main loop.
-- Disables ESP-NOW.
-- Retains Adalight serial input and WLED transition handling.
+- Receives Adalight over UART0 at 230400 baud, 8-N-1.
+- Uses a 1024-byte UART receive buffer, configured before serial initialisation.
+- Accepts frames for exactly 111 LEDs.
+- Checks the Adalight header and XOR checksum before accepting a payload.
+- Buffers the full 333-byte RGB payload before displaying a frame.
+- Sends the pixel data to the LED strip in GRB order using NeoPixelBus and UART1.
+- Starts with the LED output cleared.
+- Clears the strip after 2500 ms without a complete valid frame.
+- Does not emit debug text on the Adalight serial port; debug output would corrupt the protocol stream.
 
-Because Wi-Fi and the normal access-point path are disabled, do not expect the usual WLED web interface, wireless control, or Wi-Fi recovery to be available on this build.
+The current implementation is fixed to 111 LEDs, GPIO2/UART1 output, GRB order, 230400 baud, and a 2500 ms timeout. To use different hardware or settings, modify the source and rebuild.
 
-### Before building
+## Hardware and power considerations
 
-1. Obtain the official [WLED v0.15.4 source](https://github.com/Aircoookie/WLED/tree/v0.15.4).
-2. Configure and verify the strip in normal WLED first: 111 WS281x LEDs, GPIO2/D4 data output, and GRB colour order. Save the settings and keep a stock firmware image available before switching to the custom build.
-3. Apply the patch from this repository to the WLED source tree. If the patch does not apply cleanly, stop and confirm you are using the v0.15.4 source rather than forcing it onto a different version.
-4. Build with PlatformIO from the WLED source directory.
+Use a suitable regulated 5 V supply for the LED strip. The ESP8266 and LED strip must share a common ground, and the data signal must be connected to the strip's data input. Ensure the supply and wiring are sized for the strip's possible current draw.
 
-### Build and flash
+The tested installation powers the NodeMCU VIN and LED strip from the same external 5 V supply in parallel, with a common ground. The USB connection is made through a powered USB hub because this particular development board feeds power back onto the USB bus. NodeMCU clones vary: inspect the power-path design of your board rather than assuming its USB 5 V and VIN rails are isolated.
 
-Build the firmware:
+GPIO2 is an ESP8266 boot-strapping pin. Keep the LED data wiring and attached strip circuitry in a state that permits the board to enter its normal boot mode. If serial flashing fails to connect, temporarily isolating the LED data connection can help determine whether an attached circuit is affecting boot.
+
+## Build
+
+Install Git and PlatformIO Core, or install the PlatformIO IDE extension (which provides a managed PlatformIO Core CLI).
+
+From the repository root, open a terminal and run:
 
 ```powershell
+cd firmware
 pio run -e nodemcuv2
 ```
 
-Upload it over USB serial (replace `COM4` if Windows assigned a different port):
+The compiled firmware is written to:
+
+```text
+firmware/.pio/build/nodemcuv2/firmware.bin
+```
+
+The `firmware/.gitignore` excludes generated PlatformIO build output from Git. The standalone firmware was successfully compiled for `nodemcuv2` and tested on the hardware configuration listed above.
+
+## Flash
+
+1. Close SignalRGB and any other application that may have the controller's COM port open.
+2. Identify the controller's current COM port in Windows Device Manager.
+3. From the `firmware` directory, upload the firmware (replace `COM4` if necessary):
 
 ```powershell
 pio run -e nodemcuv2 -t upload --upload-port COM4
 ```
 
-The normal build output is under `.pio\build\nodemcuv2\`. Keep the exact source version, patch, and resulting firmware image together so the build can be reproduced.
+The PlatformIO upload speed is 115200 baud. This is separate from the firmware's runtime Adalight baud rate of 230400 baud.
 
-### Recovery
+The ESP8266 serial ROM bootloader provides a recovery path if the application firmware is not functioning. Keep a known-good firmware image and, where practical, a full-flash backup before experimenting with firmware changes. The firmware does not provide Wi-Fi or a web-based recovery interface.
 
-The custom build is not intended to be managed through the WLED web interface or Wi-Fi. If recovery is needed, flash a known-good stock WLED image built for the same ESP8266 target over USB serial using PlatformIO or an appropriate serial flashing tool. Keep the stock image and original source backup before flashing the USB-only build.
+## Install the SignalRGB plugin
+
+1. Download `plugin/WLED-USB-Adalight.js` from this repository.
+2. In SignalRGB, open the controller's **Device Information** page and click **Plugins**. This opens the custom user-plugin directory SignalRGB is using. Copy `WLED-USB-Adalight.js` into that directory; do not assume the directory is on the Windows system drive.
+3. Fully exit SignalRGB from its system-tray icon and launch it again.
+4. Confirm the controller appears as **WLED USB Adalight (111 LEDs)** and that the plugin origin is **User**.
+5. Check the device console for a successful connection to the controller's COM port at **230400 baud**.
+
+The plugin identifies the USB device by VID/PID (`1A86:7523`), not by a fixed COM port. Other CH340 devices can use the same identifiers and may cause a device-match conflict. Close serial monitors, firmware tools, and other applications that may hold the COM port before starting SignalRGB.
+
+The existing plugin's name retains “WLED” for continuity with the original device definition; **the standalone firmware does not require WLED**.
+
+## Adalight frame format
+
+Each frame consists of:
+
+1. The three ASCII signature bytes `Ada`.
+2. A two-byte big-endian LED count encoded as `LED_COUNT - 1`.
+3. A checksum byte equal to `count_high XOR count_low XOR 0x55`.
+4. Three RGB bytes per LED.
+
+For 111 LEDs, the payload is 333 bytes and the complete frame is 339 bytes. The plugin sends RGB triplets; the firmware/library applies the strip's GRB output order.
+
+## Verification performed
+
+The following checks were completed on the tested installation:
+
+- Built the standalone PlatformIO project successfully for `nodemcuv2`.
+- Flashed the firmware over COM4 using PlatformIO; esptool reported that the flash hash was verified.
+- Confirmed the strip remained dark after a full power cycle.
+- Sent direct Adalight test frames at 230400 baud; the first 30 LEDs displayed dim red and the remaining 81 displayed dim blue.
+- Confirmed the strip turned off after the 2500 ms timeout when the test stream stopped.
+- Confirmed SignalRGB loaded the custom User plugin and connected at 230400 baud.
+- Confirmed SignalRGB effects displayed correctly across the full 111-LED physical layout.
+- Confirmed the LEDs turned off after SignalRGB was fully exited.
+
+These checks establish operation on the tested installation. They are not a guarantee of compatibility or identical performance on other hardware and software versions. Long-duration stability and performance optimisation remain areas for further testing.
+
+## Performance notes
+
+The plugin currently requests a 40 ms frame interval (25 FPS cap). A 339-byte 8-N-1 frame at 230400 baud requires approximately 14.7 ms of serial wire time, excluding host, driver, and firmware overhead. The observed SignalRGB Inspector rate was around 21 FPS in the tested session. The Inspector value is not a direct measurement of the physical LED update rate. Performance diagnostics and higher frame-rate testing are separate ongoing work; no higher rate is promised by this configuration.
 
 ## Troubleshooting
 
 ### The device does not appear in SignalRGB
 
-- Check Windows Device Manager for the CH340 USB serial device.
-- Confirm its hardware IDs are `VID_1A86` and `PID_7523`.
-- Confirm the plugin is in the user Plugins directory and restart SignalRGB.
+- Check Windows Device Manager for the CH340 serial device.
+- Confirm the hardware IDs are `VID_1A86` and `PID_7523`.
+- Use the device's **Plugins** button in SignalRGB's Device Information page to open the actual custom plugin directory.
+- Fully exit and restart SignalRGB after replacing the plugin.
 
-### SignalRGB cannot connect to the serial device
+### SignalRGB cannot open the serial port
 
-- Close other applications that may have opened the COM port.
-- Unplug and reconnect the controller, then check the current COM port in Device Manager.
-- Inspect SignalRGB's device console for connection errors.
+- Close other applications using the COM port, including PlatformIO serial monitors and Python serial scripts.
+- Check the current COM port in Device Manager.
+- Inspect the SignalRGB device console for serial connection errors.
 
-### The strip shows the wrong colours
+### LEDs remain dark
 
-- Verify the strip is configured in WLED for 111 LEDs, GPIO2/D4, and the correct hardware colour order.
-- The plugin sends RGB triplets; WLED handles the configured strip colour order separately.
+- Confirm the external 5 V supply is on and the controller and strip share ground.
+- Confirm the strip data input is connected to GPIO2/D4.
+- Confirm SignalRGB reports a successful connection at 230400 baud.
+- Remember that the firmware turns the strip off after 2500 ms without a complete valid Adalight frame.
 
-### Effects run in the wrong physical direction
+### Colours or physical direction are wrong
 
-- Check that the physical LED numbering matches the four sections in **Physical LED order and SignalRGB mapping**.
-- If your strip starts elsewhere, runs in the opposite direction, or uses different segment lengths, adjust `ledPositions` in the plugin.
+- Confirm the strip is GRB WS2812B/compatible WS281x and has 111 LEDs.
+- Check the `ledPositions` array in the SignalRGB plugin. Physical geometry is a host-side mapping and is not configured in the ESP8266 firmware.
 
-### Flicker or dropped frames
+### Serial flashing fails
 
-- Start with the configured 115200 baud rate and 40 ms frame interval.
-- Close other software using the serial device.
-- Change one variable at a time; the effective frame rate depends on SignalRGB render cadence and serial transmission time.
+- Close SignalRGB and all other applications using the COM port.
+- Confirm the board is detected on the expected COM port.
+- Check whether attached circuitry on GPIO2 is interfering with ESP8266 boot mode; temporarily disconnecting the LED data wire can help isolate this.
+- Use the board's serial ROM bootloader and PlatformIO/esptool for recovery.
 
-## Licence and attribution
+## Legacy WLED implementation
 
-The SignalRGB plugin in this repository is distributed under the MIT Licence; see [`LICENSE`](./LICENSE). WLED is a separate project licensed under the [European Union Public Licence (EUPL) v1.2 or later](https://github.com/Aircoookie/WLED/blob/v0.15.4/LICENSE). The firmware patch modifies WLED source; the plugin's MIT licence does not replace WLED's licence or notice requirements.
+An earlier version of this project used a modified WLED v0.15.4 build with Wi-Fi disabled. It is retained under [`legacy/wled-0.15.4/`](legacy/wled-0.15.4/) for historical reference only. It is not required to build or use the standalone firmware described in this README. The legacy patch is version-specific and should only be applied to the corresponding upstream WLED v0.15.4 source.
 
-If you redistribute a compiled custom WLED firmware image, clearly identify it as a modified WLED v0.15.4 build, include the required WLED licence and attribution notices, and provide a readily accessible link to the corresponding source and patch for as long as the binary is distributed.
+## Licence and third-party components
+
+The repository's root `LICENSE` applies to the project materials it covers. The archived WLED patch and WLED source modifications are subject to WLED's EUPL licensing terms; the corresponding licence notice is retained in `legacy/wled-0.15.4/`. PlatformIO, the ESP8266 Arduino framework, NeoPixelBus, and SignalRGB are separate projects/components and remain subject to their respective terms. Consult their upstream repositories for current licence and attribution requirements.
