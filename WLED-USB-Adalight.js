@@ -22,7 +22,7 @@
  *
  * SERIAL CONFIGURATION
  * - Protocol: Adalight
- * - Baud rate: 115200
+ * - Baud rate: 230400
  * - Format: 8 data bits, no parity, 1 stop bit (8-N-1)
  * - Frame rate: approximately 25 FPS, subject to USB and
  *   SignalRGB rendering performance
