@@ -55,9 +55,9 @@ import serial from "@SignalRGB/serial";
 
 // Hardware configuration
 const LED_COUNT = 111;
-const BAUD_RATE = 115200;
+const BAUD_RATE = 230400;
 
-// A 339-byte frame takes about 29.4 ms at 115200 baud.
+// A 339-byte frame takes about 14.7 ms at 230400 baud.
 // Start at approximately 25 FPS to leave some serial overhead.
 const FRAME_INTERVAL_MS = 40;
 

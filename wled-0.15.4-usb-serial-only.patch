@@ -1,13 +1,92 @@
+diff --git a/wled00/cfg.cpp b/wled00/cfg.cpp
+index 90470d2..33f960a 100644
+--- a/wled00/cfg.cpp
++++ b/wled00/cfg.cpp
+@@ -108,6 +108,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
+   JsonObject hw_led = hw["led"];
+ 
+   uint16_t total = hw_led[F("total")] | strip.getLengthTotal();
++  #ifdef WLED_USB_SERIAL_ONLY
++  total = DEFAULT_LED_COUNT;
++  #endif
+   uint16_t ablMilliampsMax = hw_led[F("maxpwr")] | BusManager::ablMilliampsMax();
+   BusManager::setMilliampsMax(ablMilliampsMax);
+   Bus::setGlobalAWMode(hw_led[F("rgbwm")] | AW_GLOBAL_DISABLED);
+@@ -167,6 +170,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
+     if (fromFS) BusManager::removeAll(); // can't safely manipulate busses directly in network callback
+ 
+     for (JsonObject elm : ins) {
++      #ifdef WLED_USB_SERIAL_ONLY
++      if (s > 0) break; // USB-only controller uses one physical LED bus
++      #endif
+       if (s >= WLED_MAX_BUSSES+WLED_MIN_VIRTUAL_BUSSES) break;
+       uint8_t pins[5] = {255, 255, 255, 255, 255};
+       JsonArray pinArr = elm["pin"];
+@@ -187,6 +193,21 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
+       bool refresh = elm["ref"] | false;
+       uint16_t freqkHz = elm[F("freq")] | 0;  // will be in kHz for DotStar and Hz for PWM
+       uint8_t AWmode = elm[F("rgbwm")] | RGBW_MODE_MANUAL_ONLY;
++      #ifdef WLED_USB_SERIAL_ONLY
++      // Enforce the dedicated 111-LED WS2812B installation.
++      pins[0] = DEFAULT_LED_PIN;
++      for (unsigned p = 1; p < 5; p++) pins[p] = 255;
++
++      start = 0;
++      length = DEFAULT_LED_COUNT;
++      colorOrder = COL_ORDER_GRB;
++      skipFirst = 0;
++      ledType = DEFAULT_LED_TYPE;
++      reversed = false;
++      refresh = false;
++      freqkHz = 0;
++      AWmode = RGBW_MODE_MANUAL_ONLY;
++      #endif
+       uint8_t maPerLed = elm[F("ledma")] | LED_MILLIAMPS_DEFAULT;
+       uint16_t maMax = elm[F("maxpwr")] | (ablMilliampsMax * length) / total; // rough (incorrect?) per strip ABL calculation when no config exists
+       // To disable brightness limiter we either set output max current to 0 or single LED current to 0 (we choose output max current)
+@@ -350,7 +371,12 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
+ 
+   CJSON(serialBaud, hw[F("baud")]);
+   if (serialBaud < 96 || serialBaud > 15000) serialBaud = 1152;
+-  updateBaudRate(serialBaud *100);
++
++  #ifdef WLED_USB_SERIAL_ONLY
++   serialBaud = 2304; // Force 230400 baud for USB Adalight build
++  #endif
++
++  updateBaudRate(serialBaud * 100);
+ 
+   JsonArray hw_if_i2c = hw[F("if")][F("i2c-pin")];
+   CJSON(i2c_sda, hw_if_i2c[0]);
+@@ -485,6 +511,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
+ 
+   tdd = if_live[F("timeout")] | -1;
+   if (tdd >= 0) realtimeTimeoutMs = tdd * 100;
++  #ifdef WLED_USB_SERIAL_ONLY
++  realtimeTimeoutMs = 2500; // Fixed 2.5-second Adalight timeout
++  #endif
+   CJSON(arlsForceMaxBri, if_live[F("maxbri")]);
+   CJSON(arlsDisableGammaCorrection, if_live[F("no-gc")]); // false
+   CJSON(arlsOffset, if_live[F("offset")]); // 0
+diff --git a/wled00/const.h b/wled00/const.h
+index 33875b8..e2ffb18 100644
+--- a/wled00/const.h
++++ b/wled00/const.h
+@@ -590,7 +590,7 @@
+   #endif
+ #endif
+ #define DEFAULT_LED_TYPE TYPE_WS2812_RGB
+-#define DEFAULT_LED_COUNT 30
++#define DEFAULT_LED_COUNT 111
+ 
+ #define INTERFACE_UPDATE_COOLDOWN 1000 // time in ms to wait between websockets, alexa, and MQTT updates
+ 
 diff --git a/wled00/wled.cpp b/wled00/wled.cpp
-index 98b64ea..2d6d32f 100644
+index 98b64ea..a79df10 100644
 --- a/wled00/wled.cpp
 +++ b/wled00/wled.cpp
-@@ -53,18 +53,26 @@ void WLED::loop()
-   static size_t        avgStripMillis = 0;
-   unsigned long        stripMillis;
- #endif
--
-+  
+@@ -56,15 +56,23 @@ void WLED::loop()
+ 
    handleTime();
    #ifndef WLED_DISABLE_INFRARED
 -  handleIR();        // 2nd call to function needed for ESP32 to return valid results -- should be good for ESP8266, too
@@ -31,7 +110,19 @@ index 98b64ea..2d6d32f 100644
    #ifdef WLED_ENABLE_DMX
    handleDMX();
    #endif
-@@ -457,10 +465,14 @@ void WLED::setup()
+@@ -429,6 +437,11 @@ void WLED::setup()
+   }
+   DEBUG_PRINTLN(F("Reading config"));
+   bool needsCfgSave = deserializeConfigFromFS();
++
++  #ifdef WLED_USB_SERIAL_ONLY
++    updateBaudRate(serialBaud * 100);
++  #endif
++
+   DEBUG_PRINTF_P(PSTR("heap %u\n"), ESP.getFreeHeap());
+ 
+ #if defined(STATUSLED) && STATUSLED>=0
+@@ -457,10 +470,14 @@ void WLED::setup()
    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
    #endif
    #endif
@@ -46,7 +137,19 @@ index 98b64ea..2d6d32f 100644
  
    // all GPIOs are allocated at this point
    serialCanRX = !PinManager::isPinAllocated(hardwareRX); // Serial RX pin (GPIO 3 on ESP32 and ESP8266)
-@@ -581,6 +593,10 @@ void WLED::beginStrip()
+@@ -550,6 +567,11 @@ void WLED::beginStrip()
+   strip.setShowCallback(handleOverlayDraw);
+   doInitBusses = false;
+ 
++  #ifdef WLED_USB_SERIAL_ONLY
++  turnOnAtBoot = false;
++  bootPreset = 0;
++  #endif
++
+   if (turnOnAtBoot) {
+     if (briS > 0) bri = briS;
+     else if (bri == 0) bri = 128;
+@@ -581,6 +603,10 @@ void WLED::beginStrip()
  
  void WLED::initAP(bool resetAP)
  {
@@ -57,7 +160,7 @@ index 98b64ea..2d6d32f 100644
    if (apBehavior == AP_BEHAVIOR_BUTTON_ONLY && !resetAP)
      return;
  
-@@ -616,6 +632,7 @@ void WLED::initAP(bool resetAP)
+@@ -616,6 +642,7 @@ void WLED::initAP(bool resetAP)
      dnsServer.start(53, "*", WiFi.softAPIP());
    }
    apActive = true;
@@ -65,7 +168,7 @@ index 98b64ea..2d6d32f 100644
  }
  
  bool WLED::initEthernet()
-@@ -760,6 +777,9 @@ int8_t WLED::findWiFi(bool doScan) {
+@@ -760,6 +787,9 @@ int8_t WLED::findWiFi(bool doScan) {
  
  void WLED::initConnection()
  {
@@ -75,7 +178,16 @@ index 98b64ea..2d6d32f 100644
    DEBUG_PRINTF_P(PSTR("initConnection() called @ %lus.\n"), millis()/1000);
  
    #ifdef WLED_ENABLE_WEBSOCKETS
-@@ -840,6 +860,7 @@ void WLED::initConnection()
+@@ -804,7 +834,7 @@ void WLED::initConnection()
+ 
+   if (WLED_WIFI_CONFIGURED) {
+     showWelcomePage = false;
+-    
++
+     DEBUG_PRINTF_P(PSTR("Connecting to %s...\n"), multiWiFi[selectedWiFi].clientSSID);
+ 
+     // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
+@@ -840,6 +870,7 @@ void WLED::initConnection()
      statusESPNow = espNowOK ? ESP_NOW_STATE_ON : ESP_NOW_STATE_ERROR;
    }
  #endif
@@ -83,9 +195,8 @@ index 98b64ea..2d6d32f 100644
  }
  
  void WLED::initInterfaces()
-
 diff --git a/wled00/wled.h b/wled00/wled.h
-index f29656e..c82acec 100644
+index f29656e..96557fa 100644
 --- a/wled00/wled.h
 +++ b/wled00/wled.h
 @@ -18,7 +18,8 @@
@@ -107,4 +218,12 @@ index f29656e..c82acec 100644
  
  #define WLED_ENABLE_FS_EDITOR      // enable /edit page for editing FS content. Will also be disabled with OTA lock
  
-
+@@ -501,7 +502,7 @@ WLED_GLOBAL bool hueApplyBri _INIT(true);
+ WLED_GLOBAL bool hueApplyColor _INIT(true);
+ #endif
+ 
+-WLED_GLOBAL uint16_t serialBaud _INIT(1152); // serial baud rate, multiply by 100
++WLED_GLOBAL uint16_t serialBaud _INIT(2304); // serial baud rate, multiply by 100
+ WLED_GLOBAL bool     serialCanRX _INIT(false);
+ WLED_GLOBAL bool     serialCanTX _INIT(false);
+ 
