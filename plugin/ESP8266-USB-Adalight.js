@@ -1,6 +1,7 @@
 /*
  * ESP8266 USB Adalight — SignalRGB Plugin
  * Copyright (c) 2026 DukeShank
+ * https://github.com/DukeShank/ESP8266-USB-Adalight
  *
  * PURPOSE
  * Streams per-LED RGB colour data from SignalRGB to an ESP8266
@@ -16,21 +17,31 @@
  * - LED colour order: GRB
  *
  * FIRMWARE REQUIREMENTS
- * - Project's standalone ESP8266 Adalight firmware
- * - UART0 RX for serial reception (GPIO3)
- * - UART1 TX for WS2812 LED output (GPIO2)
+ * - This repository's standalone ESP8266 firmware (firmware/)
+ * - The legacy WLED 0.15.4 build (legacy/) accepts the same frames
  * - No WLED installation required
  *
  * SERIAL CONFIGURATION
  * - Protocol: Adalight
  * - Baud rate: 230400
  * - Format: 8 data bits, no parity, 1 stop bit (8-N-1)
- * - Frame interval: 40 ms (25 FPS requested maximum)
+ * - Minimum frame gap: 20 ms. SignalRGB calls Render() every 30 ms
+ *   by default, so one frame is sent per Render() call.
+ *
+ * SETTINGS
+ * - Lighting Mode: "Canvas" (effect colours) or "Forced" (one colour)
+ * - Forced Color: colour used in Forced mode
+ *
+ * EXIT AND SLEEP
+ * Shutdown() sends one all-black frame and then closes the port, so
+ * the strip turns off at once. If that frame does not arrive, the
+ * firmware's 2500 ms timeout turns the strip off.
  *
  * INSTALLATION
  * Copy this file into the custom user-plugin directory opened
  * through SignalRGB's Device Information > Plugins button.
- * Fully exit and restart SignalRGB after replacing the plugin.
+ * Delete WLED-USB-Adalight.js (the file name before version 1.0.0)
+ * from that directory. Fully exit and restart SignalRGB.
  *
  * LIMITATIONS
  * - Hardware is identified by USB VID/PID, not a fixed COM port.
@@ -39,29 +50,45 @@
  * - The controller has no Wi-Fi, web interface, or network control.
  *
  * STATUS
- * End-to-end operation verified on Windows 11 with SignalRGB,
- * standalone ESP8266 firmware, and a 111-LED WS281x strip.
+ * Version 1.0.0. See README.md for tested configuration and results.
  *
  * LICENCE
- * See the repository's LICENSE file.
+ * MIT. See the repository's LICENSE file.
  */
 import serial from "@SignalRGB/serial";
+
+/* global
+device:readonly, LightingMode:readonly, forcedColor:readonly
+*/
+
+const LOG_PREFIX = "[ESP8266 USB Adalight]";
 
 // Hardware configuration
 const LED_COUNT = 111;
 const BAUD_RATE = 230400;
 
-// A 339-byte frame takes about 14.7 ms at 230400 baud.
-// Start at approximately 25 FPS to leave some serial overhead.
-const FRAME_INTERVAL_MS = 40;
+// One 339-byte frame needs about 14.7 ms on the wire at 230400 baud
+// (10 bits per byte). Writing 111 LEDs takes about 3.3 ms in the
+// firmware. A 20 ms minimum gap keeps the serial line below its limit
+// and still sends a frame on every Render() call at the default 30 ms
+// interval.
+const MIN_FRAME_INTERVAL_MS = 20;
 
-// Physical monitor perimeter, matching the original WLED layout.
+// Time between connection attempts while the port is not open.
+const RECONNECT_INTERVAL_MS = 2000;
+
+// Device image: 1024x1024 transparent PNG, artwork in the central
+// 920x920 area, hosted in this repository.
+const IMAGE_URL =
+    "https://raw.githubusercontent.com/DukeShank/ESP8266-USB-Adalight/main/images/esp8266-usb-adalight.png";
+
+// Physical monitor perimeter.
 //
 // LED 1 starts at the bottom-left.
-// 1–20:   left edge, bottom to top
-// 21–55:  top edge, left to right
-// 56–75:  right edge, top to bottom
-// 76–111: bottom edge, right to left
+// 1–20:   left edge, bottom to top     (20 LEDs)
+// 21–55:  top edge, left to right      (35 LEDs)
+// 56–75:  right edge, top to bottom    (20 LEDs)
+// 76–111: bottom edge, right to left   (36 LEDs)
 //
 // Grid coordinates run from x=0..36 and y=0..21.
 const CANVAS_WIDTH = 37;
@@ -98,15 +125,44 @@ const ledPositions = [
     )
 ];
 
+// Adalight frame: "Ada", LED count minus one (big-endian),
+// checksum (high XOR low XOR 0x55), then 3 RGB bytes per LED.
+// The header never changes, so it is written once. The colour bytes
+// are overwritten in place for every frame.
+const HEADER_LENGTH = 6;
+const FRAME_LENGTH = HEADER_LENGTH + LED_COUNT * 3; // 339 bytes
+
+const frame = createFrame();
+
+function createFrame() {
+    const buffer = new Array(FRAME_LENGTH).fill(0);
+    const countMinusOne = LED_COUNT - 1;
+    const high = (countMinusOne >> 8) & 0xFF;
+    const low = countMinusOne & 0xFF;
+
+    buffer[0] = 0x41; // "A"
+    buffer[1] = 0x64; // "d"
+    buffer[2] = 0x61; // "a"
+    buffer[3] = high;
+    buffer[4] = low;
+    buffer[5] = high ^ low ^ 0x55;
+
+    return buffer;
+}
+
 let serialConnected = false;
 let lastFrameTime = 0;
-let lastConnectAttempt = 0;
+let lastConnectAttempt = -Infinity;
 let connectionWarningLogged = false;
 let writeWarningLogged = false;
 
 // Device identity
 export function Name() {
-    return "WLED USB Adalight (111 LEDs)";
+    return "ESP8266 USB Adalight (111 LEDs)";
+}
+
+export function Version() {
+    return "1.0.0";
 }
 
 export function Publisher() {
@@ -128,6 +184,11 @@ export function Type() {
 export function DeviceType() {
     return "lightingcontroller";
 }
+
+export function ImageUrl() {
+    return IMAGE_URL;
+}
+
 // Device layout
 export function Size() {
     return [CANVAS_WIDTH, CANVAS_HEIGHT];
@@ -149,12 +210,52 @@ export function LedPositions() {
     return ledPositions;
 }
 
-// Establish the USB serial connection.
+// User settings
+export function ControllableParameters() {
+    return [
+        {
+            property: "LightingMode",
+            group: "lighting",
+            label: "Lighting Mode",
+            type: "combobox",
+            values: ["Canvas", "Forced"],
+            default: "Canvas"
+        },
+        {
+            property: "forcedColor",
+            group: "lighting",
+            label: "Forced Color",
+            min: "0",
+            max: "360",
+            type: "color",
+            default: "#009bde"
+        }
+    ];
+}
+
+function log(message) {
+    device.log(`${LOG_PREFIX} ${message}`);
+}
+
+// Close the port if it is open. Errors are ignored because the port
+// may already be gone (for example, after the USB cable is removed).
+function closeSerial() {
+    try {
+        if (serial.isConnected()) {
+            serial.disconnect();
+        }
+    } catch (error) {
+        // Nothing else to do; the next connect attempt starts clean.
+    }
+
+    serialConnected = false;
+}
+
+// Open the USB serial connection, at most once per RECONNECT_INTERVAL_MS.
 function connectSerial() {
     const now = Date.now();
 
-    // Avoid repeatedly attempting a failed connection every frame.
-    if (now - lastConnectAttempt < 2000) return;
+    if (now - lastConnectAttempt < RECONNECT_INTERVAL_MS) return;
     lastConnectAttempt = now;
 
     try {
@@ -168,31 +269,40 @@ function connectSerial() {
         serialConnected = !!opened && serial.isConnected();
 
         if (serialConnected) {
-            device.log(
-                `[WLED USB Adalight] Connected on ` +
-                `${serial.getPortName()} at ${serial.getBaudRate()} baud.`
+            log(
+                `Connected on ${serial.getPortName()} ` +
+                `at ${serial.getBaudRate()} baud.`
             );
+
+            // Log the next connection or write problem again.
             connectionWarningLogged = false;
+            writeWarningLogged = false;
         } else if (!connectionWarningLogged) {
-            device.log(
-                "[WLED USB Adalight] Serial connection failed; will retry."
-            );
+            log("Serial connection failed; will retry every 2 s.");
             connectionWarningLogged = true;
         }
     } catch (error) {
         serialConnected = false;
 
         if (!connectionWarningLogged) {
-            device.log(
-                `[WLED USB Adalight] Connection error: ${String(error)}`
-            );
+            log(`Connection error: ${String(error)}; will retry every 2 s.`);
             connectionWarningLogged = true;
         }
     }
 }
 
-export function Initialize() {
+// Return true when the port is open; otherwise try to reconnect.
+function ensureConnected() {
+    try {
+        if (serialConnected && serial.isConnected()) return true;
+    } catch (error) {
+        // Treated as disconnected below.
+    }
+
+    serialConnected = false;
     connectSerial();
+
+    return serialConnected;
 }
 
 // Convert a colour channel to a valid 8-bit value.
@@ -204,56 +314,47 @@ function toByte(value) {
     return Math.max(0, Math.min(255, Math.round(number)));
 }
 
-// Send one Adalight frame to the ESP8266 controller.
-export function Render() {
-    if (!serialConnected) {
-        connectSerial();
-        return;
-    }
+// Convert "#rrggbb" to [r, g, b]. Invalid input gives black.
+function hexToRgb(hex) {
+    const match = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i
+        .exec(String(hex));
 
-    try {
-        if (!serial.isConnected()) {
-            serialConnected = false;
-            connectSerial();
-            return;
-        }
-    } catch (error) {
-        serialConnected = false;
-        connectSerial();
-        return;
-    }
+    if (!match) return [0, 0, 0];
 
-    const now = Date.now();
-
-    if (now - lastFrameTime < FRAME_INTERVAL_MS) return;
-    lastFrameTime = now;
-
-    // Adalight header: "Ada", LED-count-minus-one, XOR checksum.
-    const countMinusOne = LED_COUNT - 1;
-    const high = (countMinusOne >> 8) & 0xFF;
-    const low = countMinusOne & 0xFF;
-    const checksum = high ^ low ^ 0x55;
-
-    const frame = [
-        0x41, 0x64, 0x61,
-        high, low, checksum
+    return [
+        parseInt(match[1], 16),
+        parseInt(match[2], 16),
+        parseInt(match[3], 16)
     ];
-
-    // Adalight expects RGB triples. WLED handles the strip's GRB
-    // hardware colour order separately.
-    // Read the colour from the physical LED's mapped 2D position.
-    for (let index = 0; index < LED_COUNT; index++) {
-        const [x, y] = ledPositions[index];
-        const color = device.color(x, y);
-
-        // Adalight expects RGB byte order.
-        frame.push(
-             toByte(color && color[0]),
-             toByte(color && color[1]),
-            toByte(color && color[2])
-    );
 }
 
+// Fill the colour bytes of the frame. Adalight expects RGB byte
+// order; the firmware converts to the strip's GRB order.
+function fillFrameColors() {
+    const forced = typeof LightingMode !== "undefined" &&
+        LightingMode === "Forced";
+    const forcedRgb = forced ? hexToRgb(forcedColor) : null;
+
+    let offset = HEADER_LENGTH;
+
+    for (let index = 0; index < LED_COUNT; index++) {
+        let color = forcedRgb;
+
+        if (!forced) {
+            // Colour at the physical LED's mapped canvas position.
+            const [x, y] = ledPositions[index];
+            color = device.color(x, y);
+        }
+
+        frame[offset++] = toByte(color && color[0]);
+        frame[offset++] = toByte(color && color[1]);
+        frame[offset++] = toByte(color && color[2]);
+    }
+}
+
+// Send the frame buffer. On an error the port is closed so that the
+// next Render() call reconnects.
+function writeFrame() {
     try {
         const written = serial.write(frame);
 
@@ -262,34 +363,51 @@ export function Render() {
             written < frame.length &&
             !writeWarningLogged
         ) {
-            device.log(
-                `[WLED USB Adalight] Short serial write: ` +
-                `${written}/${frame.length} bytes.`
-            );
+            log(`Short serial write: ${written}/${frame.length} bytes.`);
             writeWarningLogged = true;
         }
-    } catch (error) {
-        serialConnected = false;
 
+        return true;
+    } catch (error) {
         if (!writeWarningLogged) {
-            device.log(
-                `[WLED USB Adalight] Serial write error: ${String(error)}`
-            );
+            log(`Serial write error: ${String(error)}`);
             writeWarningLogged = true;
         }
+
+        closeSerial();
+
+        return false;
     }
 }
 
+export function Initialize() {
+    connectSerial();
+}
+
+// Send one Adalight frame to the ESP8266 controller.
+export function Render() {
+    if (!ensureConnected()) return;
+
+    const now = Date.now();
+
+    if (now - lastFrameTime < MIN_FRAME_INTERVAL_MS) return;
+    lastFrameTime = now;
+
+    fillFrameColors();
+    writeFrame();
+}
+
+// Called on exit, on system sleep and when streaming is turned off.
+// All three cases turn the strip off.
 export function Shutdown() {
     try {
         if (serial.isConnected()) {
-            serial.disconnect();
+            frame.fill(0, HEADER_LENGTH);
+            writeFrame();
         }
     } catch (error) {
-        device.log(
-            `[WLED USB Adalight] Disconnect error: ${String(error)}`
-        );
+        log(`Shutdown error: ${String(error)}`);
     }
 
-    serialConnected = false;
+    closeSerial();
 }
