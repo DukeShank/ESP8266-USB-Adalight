@@ -1,4 +1,6 @@
-# WLED USB Adalight for SignalRGB
+# WLED USB Adalight for SignalRGB (legacy)
+
+> **Archived.** This page describes the earlier WLED-based firmware. The recommended firmware is the standalone ESP8266 firmware described in the [main README](../../README.md). The current plugin, [`ESP8266-USB-Adalight.js`](../../plugin/ESP8266-USB-Adalight.js), also works with this WLED build: it sends the same Adalight frames for 111 LEDs at 230400 baud. With this build, WLED's own brightness limiter applies instead of the standalone firmware's current limit.
 
 A custom SignalRGB serial plugin and WLED firmware patch for controlling an ESP8266-based addressable RGB LED strip directly over USB using the Adalight protocol. The intended setup operates without Wi-Fi.
 
@@ -34,7 +36,7 @@ This is a **modified WLED build**, not a standalone Adalight firmware and not an
 | Serial baud rate | 230400 baud |
 | Serial format | 8 data bits, no parity, 1 stop bit (8-N-1) |
 | SignalRGB canvas | 37 × 22 |
-| Plugin frame-send interval | 40 ms (25 FPS maximum requested rate) |
+| Plugin frame-send interval | 40 ms at the time of these tests (20 ms minimum gap since plugin 1.0.0) |
 | Firmware Adalight timeout | 2500 ms (2.5 seconds) |
 | Boot state | LEDs forced off; no boot preset |
 | PlatformIO environment | `nodemcuv2` |
@@ -50,22 +52,22 @@ The tested 111-LED strip follows the perimeter of a monitor, starting at the bot
 | --- | ---: | --- |
 | 1–20 | 20 | Left edge, bottom to top |
 | 21–55 | 35 | Top edge, left to right |
-| 56–76 | 21 | Right edge, top to bottom |
-| 77–111 | 35 | Bottom edge, right to left |
+| 56–75 | 20 | Right edge, top to bottom |
+| 76–111 | 36 | Bottom edge, right to left |
 
-The plugin maps these LEDs to a 37 × 22 SignalRGB canvas so effects follow the physical strip path. Different LED counts or physical routing require edits to the hardware constants and `ledPositions` array in `WLED-USB-Adalight.js`.
+The plugin maps these LEDs to a 37 × 22 SignalRGB canvas so effects follow the physical strip path. Different LED counts or physical routing require edits to the hardware constants and `ledPositions` array in `ESP8266-USB-Adalight.js`.
 
 ## Install the SignalRGB plugin
 
-1. Download [`WLED-USB-Adalight.js`](../../plugin/WLED-USB-Adalight.js) from this repository.
-2. In SignalRGB, open the WLED USB Adalight device's **Device Information** page and click **Plugins**. This opens the custom user-plugin directory SignalRGB uses. Copy `WLED-USB-Adalight.js` into that directory. Do not assume that the directory is under the Windows system drive; it may be on another drive or redirected with the user's Documents folder.
+1. Download [`ESP8266-USB-Adalight.js`](../../plugin/ESP8266-USB-Adalight.js) from this repository.
+2. In SignalRGB, open the USB Adalight device's **Device Information** page and click **Plugins**. This opens the custom user-plugin directory SignalRGB uses. Copy `ESP8266-USB-Adalight.js` into that directory and delete `WLED-USB-Adalight.js` (the file name before version 1.0.0) if it is there. Do not assume that the directory is under the Windows system drive; it may be on another drive or redirected with the user's Documents folder.
 3. Close other programs that might have the controller's COM port open, including serial monitors and firmware tools.
 4. Fully exit SignalRGB from its system-tray icon, then launch it again.
-5. Confirm that **WLED USB Adalight (111 LEDs)** appears. The device information should identify the plugin origin as **User** when the custom user plugin is loaded.
+5. Confirm that **ESP8266 USB Adalight (111 LEDs)** appears. The device information should identify the plugin origin as **User** when the custom user plugin is loaded.
 6. Check the SignalRGB device console for a successful connection to the controller's COM port at **230400 baud**.
 7. Run a perimeter effect and confirm that its direction follows the physical LED order described above.
 
-The plugin uses SignalRGB's built-in serial API. It requests 230400 baud and limits frame-send attempts to one every 40 ms (25 FPS maximum requested rate). Actual frame rate depends on SignalRGB's render cadence, serial transmission, and device processing.
+The plugin uses SignalRGB's built-in serial API. It requests 230400 baud and sends a frame when at least 20 ms have passed since the previous one (one frame per `Render()` call at SignalRGB's default 30 ms interval). Actual frame rate depends on SignalRGB's render cadence, serial transmission, and device processing.
 
 ## Custom WLED USB-only firmware
 
@@ -107,8 +109,8 @@ Because Wi-Fi and the normal access-point path are disabled, do not expect the u
 5. Check and apply the patch from the WLED source directory. Stop if the check fails; do not force the patch onto a different WLED version:
 
    ```powershell
-   git apply --check ..\WLED-USB-Adalight\legacy\wled-0.15.4\wled-0.15.4-usb-serial-only.patch
-   git apply ..\WLED-USB-Adalight\legacy\wled-0.15.4\wled-0.15.4-usb-serial-only.patch
+   git apply --check ..\ESP8266-USB-Adalight\legacy\wled-0.15.4\wled-0.15.4-usb-serial-only.patch
+   git apply ..\ESP8266-USB-Adalight\legacy\wled-0.15.4\wled-0.15.4-usb-serial-only.patch
    ```
 
    Adjust the relative path if your repositories are in different directories.
@@ -186,7 +188,7 @@ These results establish the tested configuration; they are not a guarantee of id
 
 ### Flicker or dropped frames
 
-- The plugin requests 230400 baud and uses a 40 ms frame-send interval (25 FPS maximum requested rate).
+- The plugin requests 230400 baud and uses a 20 ms minimum gap between frames (40 ms before plugin 1.0.0).
 - Close other software using the serial device.
 - Actual frame rate depends on SignalRGB render cadence, serial transmission, and device processing. Change one variable at a time when testing.
 
